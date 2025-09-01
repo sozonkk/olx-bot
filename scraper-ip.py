@@ -8,9 +8,9 @@ import re
 from datetime import datetime
 
 # --- KONFIGURACJA ---
-# Dodaj tutaj tyle linków, ile modeli i lokalizacji chcesz monitorować.
+# Zaktualizowana lista linków.
 SEARCH_URLS = [
-    "https://www.olx.pl/warszawa/q-iphone-12/?search%5Bdist%5D=75&search%5Bfilter_enum_phonemodel%5D%5B0%5D=iphone-12&search%5Bfilter_enum_phonemodel%5D%5B1%5D=iphone-12-mini&search%5Bfilter_enum_phonemodel%5D%5B2%5D=iphone-12-pro-max&search%5Bfilter_enum_phonemodel%5D%5B3%5D=iphone-12-pro&search%5Bfilter_enum_state%5D%5B0%5D=used&search%5Bfilter_float_price%3Afrom%5D=300&search%5Bfilter_float_price%3Ato%5D=600",
+    "https://www.olx.pl/warszawa/q-iphone-12/?search%5Bdist%5D=75&search%5Bfilter_enum_phonemodel%5D%5B0%5D=iphone-12&search%5Bfilter_enum_phonemodel%5D%5B1%5D=iphone-12-mini&search%5Bfilter_enum_phonemodel%5D%5B2%5D=iphone-12-pro-max&search%5Bfilter_enum_phonemodel%5D%5B3%5D=iphone-12-pro&search%5Bfilter_enum_state%5D%5B0%5D=used&search%5Bfilter_float_price%3Afrom%5D=300&search%5Bfilter_float_price%3Ato%5D=600"
 ]
 
 # URL do webhooka będzie pobierany z bezpiecznego miejsca na Railway
@@ -78,32 +78,40 @@ def scrape_single_url(url_to_scrape):
         response = requests.get(url_to_scrape, headers=headers)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
-        ads = soup.find_all('div', {'data-cy': 'l-card'})
+        
+        ads = soup.find_all('div', class_='css-1sw7q4x')
 
         if not ads:
-            print("Nie znaleziono żadnych ogłoszeń dla tego linku.")
+            print("Nie znaleziono żadnych ogłoszeń dla tego linku. Sprawdź selektor.")
             return []
 
         for ad in ads:
-            listing_id = ad.get('id')
+            link_elem = ad.find('a', href=True)
+            if not link_elem: continue
+            
+            link = link_elem['href']
+            if not link.startswith('http'):
+                link = f"https://www.olx.pl{link}"
+
+            listing_id_match = re.search(r'-ID([a-zA-Z0-9]+)\.html', link)
+            listing_id = listing_id_match.group(1) if listing_id_match else None
             if not listing_id: continue
 
             title_elem = ad.find('h6')
+            title = title_elem.get_text(strip=True) if title_elem else "Brak tytułu"
+
             price_elem = ad.find('p', {'data-testid': 'ad-price'})
-            link_elem = ad.find('a')
+            price = price_elem.get_text(strip=True) if price_elem else "Nie podano ceny"
+
             location_date_elem = ad.find('p', {'data-testid': 'location-date'})
-            
-            if not all([title_elem, price_elem, link_elem, location_date_elem]): continue
+            location, date_added = ("Brak danych", "Dzisiaj")
+            if location_date_elem:
+                parts = location_date_elem.get_text(strip=True).split(' - ')
+                location = parts[0] if len(parts) > 0 else "Brak danych"
+                date_added = parts[1] if len(parts) > 1 else "Dzisiaj"
 
-            title = title_elem.get_text().strip()
-            price = price_elem.get_text().strip()
-            link = "https://www.olx.pl" + link_elem['href']
-            
-            location_date_text = location_date_elem.get_text().strip()
-            location, date_added = (location_date_text.split(' - ') + ['Brak danych'])[:2]
-
-            image = ad.find('img')
-            image_url = image['src'] if image and image.has_attr('src') else "https://i.imgur.com/2s4b6ns.png"
+            image_elem = ad.find('img')
+            image_url = image_elem['src'] if image_elem and image_elem.has_attr('src') else "https://i.imgur.com/2s4b6ns.png"
             
             memory = extract_memory_from_title(title)
             
@@ -117,6 +125,7 @@ def scrape_single_url(url_to_scrape):
                 'date_added': date_added,
                 'image_url': image_url
             })
+        print(f"Znaleziono {len(found_listings)} ogłoszeń na stronie.")
         return found_listings
     except Exception as e:
         print(f"❌ Wystąpił błąd podczas sprawdzania linku: {e}")
@@ -133,7 +142,7 @@ if __name__ == "__main__":
     all_current_listings = []
     for url in SEARCH_URLS:
         all_current_listings.extend(scrape_single_url(url))
-        time.sleep(3) # Mała przerwa między kolejnymi linkami
+        time.sleep(3)
 
     new_found_ids = set()
     notifications_sent = 0
@@ -141,21 +150,21 @@ if __name__ == "__main__":
     if is_first_run:
         for listing in all_current_listings:
             new_found_ids.add(listing['id'])
-        print(f"\n✅ Zakończono pierwsze uruchomienie. Zapisano {len(new_found_ids)} istniejących ogłoszeń do pamięci.")
+        if new_found_ids:
+             print(f"\n✅ Zakończono pierwsze uruchomienie. Zapisano {len(new_found_ids)} istniejących ogłoszeń do pamięci.")
     else:
         for listing in all_current_listings:
             if listing['id'] not in processed_ids:
                 send_discord_notification(listing)
                 new_found_ids.add(listing['id'])
                 notifications_sent += 1
-                time.sleep(2) # Przerwa między wysyłaniem powiadomień
+                time.sleep(2)
         
         if notifications_sent > 0:
             print(f"\n🎉 Znaleziono i wysłano {notifications_sent} nowych ogłoszeń!")
         else:
             print("\n😴 Brak nowych ogłoszeń w tym cyklu.")
 
-    # Zaktualizuj plik z ID tylko jeśli znaleziono nowe
     if new_found_ids:
         updated_ids = processed_ids.union(new_found_ids)
         save_processed_ids(updated_ids)
