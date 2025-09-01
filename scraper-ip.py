@@ -43,30 +43,52 @@ def extract_memory_from_title(title):
         return f"{match.group(1)} GB"
     return "Nie podano"
 
+# --- OTO ZAKTUALIZOWANA I POPRAWIONA SEKCJA ---
 def send_discord_notification(listing):
     """Wysyła rozbudowane powiadomienie na Discorda."""
     if not WEBHOOK_URL:
         print("BŁĄD: Brak skonfigurowanego WEBHOOK_URL!")
         return
 
+    # Upewnij się, że link jest pełny
+    if not listing['link'].startswith('http'):
+        listing['link'] = f"https://www.olx.pl{listing['link']}"
+
     webhook = DiscordWebhook(url=WEBHOOK_URL, username="🤖 Bot OLX Okazje")
+    
+    # Tworzenie "embed" - czyli ładnej, sformatowanej wiadomości
     embed = DiscordEmbed(
-        title=f"🚨 {listing['title']}",
-        description=f"Nowa oferta znaleziona na OLX!",
+        title=listing['title'][:256],  # Tytuł ma limit 256 znaków
+        description="Nowa oferta znaleziona na OLX!",
         color="03b2f8",
         url=listing['link']
     )
-    embed.set_thumbnail(url=listing['image_url'])
-    embed.add_embed_field(name="💰 Cena", value=listing['price'], inline=True)
-    embed.add_embed_field(name="💾 Pamięć", value=listing['memory'], inline=True)
-    embed.add_embed_field(name="📍 Lokalizacja", value=listing['location'], inline=True)
-    embed.add_embed_field(name="📅 Dodano", value=listing['date_added'], inline=True)
-    embed.set_footer(text=f"ID Ogłoszenia: {listing['id']}")
+    
+    # Dodanie pól - upewniamy się, że żadna wartość nie jest pusta
+    embed.add_embed_field(name="💰 Cena", value=listing.get('price', 'Brak') or "Brak", inline=True)
+    embed.add_embed_field(name="💾 Pamięć", value=listing.get('memory', 'Brak') or "Brak", inline=True)
+    embed.add_embed_field(name="📍 Lokalizacja", value=listing.get('location', 'Brak') or "Brak", inline=True)
+    embed.add_embed_field(name="📅 Dodano", value=listing.get('date_added', 'Brak') or "Brak", inline=True)
+    
+    # Dodanie miniaturki, tylko jeśli link do obrazka istnieje
+    if listing.get('image_url'):
+        embed.set_thumbnail(url=listing['image_url'])
+        
+    embed.set_footer(text=f"ID Ogłoszenia: {listing.get('id', 'N/A')}")
     embed.set_timestamp()
     
     webhook.add_embed(embed)
-    response = webhook.execute()
-    print(f"✅ Wysłano powiadomienie dla: {listing['title']}")
+    
+    try:
+        response = webhook.execute()
+        if response.status_code in [200, 204]:
+             print(f"✅ Wysłano powiadomienie dla: {listing['title']}")
+        else:
+            # Drukowanie szczegółowej odpowiedzi błędu od Discorda
+            print(f"❌ Błąd wysyłania na Discord: {response.status_code}, Odpowiedź: {response.content}")
+    except Exception as e:
+        print(f"❌ Krytyczny błąd podczas wysyłania na Discord: {e}")
+# --- KONIEC ZAKTUALIZOWANEJ SEKCJI ---
 
 def scrape_single_url(url_to_scrape):
     """Pobiera i przetwarza wszystkie ogłoszenia z jednego linku."""
